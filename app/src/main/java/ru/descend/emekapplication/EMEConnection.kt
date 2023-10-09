@@ -1,5 +1,6 @@
 package ru.descend.emekapplication
 
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import okhttp3.Call
@@ -8,95 +9,74 @@ import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okhttp3.internal.headersContentLength
 import java.io.IOException
+import java.net.ProtocolException
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.UUID
+import java.util.Locale
 import java.util.concurrent.TimeUnit
-
-class EMEResponse {
-
-    private val data = ArrayList<Pair<String, String>>()
-    lateinit var URL: String
-    var errorString: String? = null
-    var timeBeginRequest: Long = 0
-    var timeEndRequest: Long = 0
-    val UUIDRequest = UUID.randomUUID().toString()
-    lateinit var requestString: String
-
-    fun create(inParams: String) {
-
-        if (errorString != null) {
-            Log.e("EMECommection", errorString?:"")
-            return
-        }
-
-        parseInnerString(inParams)
-    }
-
-    /**
-     * Получение всего массива данных с сервера по запросу
-     */
-    fun getData() = data
-
-    /**
-     * Вывод времени работы запроса на сервер
-     * #
-     * SimpleDateFormat("HH:mm:ss.SSS").format(obj.getTimeRequest())
-     * @return Объект даты представляющий продолжительность запроса
-     */
-    fun getTimeRequest() = Date(timeEndRequest - timeBeginRequest)
-
-    /**
-     * Получение строкового представления даты выполнения запроса
-     */
-    fun getTimeRequestAsString() = SimpleDateFormat("HH:mm:ss.SSS").format(getTimeRequest())
-
-    /**
-     * Получить кол-во объектов ключ=значение от сервера
-     */
-    fun getCountItems() = data.size
-
-    /**
-     * Найти значение по ключу
-     * @return содержимое ключа, либо Null если таковой не найден
-     */
-    fun getValue(key: String): String? {
-        return data.find { it.first == key }?.second
-    }
-
-    /**
-     * Проверка ключа в ответе от сервера
-     */
-    fun isExistsKey(key: String): Boolean {
-        return data.find { it.first == key } != null
-    }
-
-    private fun parseInnerString(inParams: String) {
-        val lines = inParams.split("&")
-        lines.forEach {
-            val line = it.split("=")
-            if (line.size == 2) data.add(Pair(line[0], line[1]))
-        }
-    }
-
-    override fun toString(): String {
-        var params = ""
-        data.forEach { params += it.first + "=" + it.second + ";" }
-        return "EMEResponse={$params}"
-    }
-}
 
 object EMEConnection {
 
-    private val SERVER_URL = "http://10.10.10.236:5400/terminals.html"
+    private const val TAG = "EMEACon"
 
-    private val client = OkHttpClient.Builder()
-//        .callTimeout(60, TimeUnit.SECONDS)
-        .connectTimeout(15, TimeUnit.SECONDS)
-//        .readTimeout(60, TimeUnit.SECONDS)
-//        .writeTimeout(60, TimeUnit.SECONDS)
-        .build()
+    private var SERVER_IP: String = ""
+    private var SERVER_PORT: String = ""
+    private var SERVER_FILENAME: String = ""
+    private var SERVER_URL: String = ""
+    private lateinit var CLIENT: OkHttpClient
+
+    private var p_Timeouts: Long = 15
+    private var p_MethodName: String = ""
+    private var p_MethodParams: Int = 0
+
+    fun setTimeouts(seconds: Long) : EMEConnection {
+        p_Timeouts = seconds
+        if (p_Timeouts < 0) throw IllegalArgumentException("Timeout secs does not be low than 0")
+
+        return this
+    }
+
+    suspend fun doRequestMethod(method: String, paramsCount: Int, vararg params: Pair<String, String>) : EMEResponse {
+        p_MethodName = method
+        if (p_MethodName.isBlank()) throw IllegalArgumentException("Method name does not be Empty")
+
+        p_MethodParams = paramsCount
+        if (p_MethodParams < 0) throw IllegalArgumentException("Method params does not be low than 0")
+
+        if (p_MethodParams != params.size) throw IllegalArgumentException("The method($p_MethodName) should contain $p_MethodParams parameters, but contains ${params.size} parameters")
+
+        return doRequest(*params)
+    }
+
+    fun init(ip: String, port: String, filename: String): EMEConnection {
+        SERVER_IP = ip
+        SERVER_PORT = port
+        SERVER_FILENAME = filename
+        SERVER_URL = "http://$SERVER_IP:$SERVER_PORT/$SERVER_FILENAME"
+
+        initializeClient()
+        return this
+    }
+
+    private fun initializeClient() {
+        CLIENT = OkHttpClient.Builder()
+            .callTimeout(p_Timeouts, TimeUnit.SECONDS)
+            .connectTimeout(p_Timeouts, TimeUnit.SECONDS)
+            .readTimeout(p_Timeouts, TimeUnit.SECONDS)
+            .writeTimeout(p_Timeouts, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun addSystemFields(formBody: FormBody.Builder, responseObj: EMEResponse) = formBody.apply {
+        add("EMEACon", EMEResponse.EMECONNECTION_VERSION)  //версия модуля
+        add("EMEACon_DATESTAMP", SimpleDateFormat("yyyy-MM-dd_HH:mm:ss", Locale.ROOT).format(System.currentTimeMillis())) //дата\время устройства
+        add("EMEACon_DEVICE", "SDK: ${Build.VERSION.SDK_INT} PHONE: ${Build.BRAND} ${Build.MODEL}") //информация об устройстве
+
+        add("EMEACon_REQ_UUID", responseObj.UUIDRequest)
+        add("EMEACon_REQ_URL", responseObj.URL)
+        add("EMEACon_REQ_STRING", responseObj.requestString)
+    }
 
     suspend fun doRequest(vararg params: Pair<String, String>) : EMEResponse {
 
@@ -105,23 +85,32 @@ object EMEConnection {
         val deferredResult = CompletableDeferred<EMEResponse>()
         val formBody = FormBody.Builder()
         var reqString = ""
+
+        if (p_MethodName.isNotBlank()) {
+            reqString += "EMEACon_METHOD=$p_MethodName;"
+            formBody.add("EMEACon_METHOD", p_MethodName)
+            formBody.add("EMEACon_METHOD_PARAMS", p_MethodParams.toString())
+        }
+
         params.forEach {
             formBody.add(it.first, it.second)
             reqString += it.first + "=" + it.second + ";"
         }
+
+        responseObj.URL = SERVER_URL
+        responseObj.timeBeginRequest = System.currentTimeMillis()
+        responseObj.requestString = reqString
+
+        addSystemFields(formBody, responseObj)
 
         val request = Request.Builder()
             .url(SERVER_URL)
             .post(formBody.build())
             .build()
 
-        responseObj.requestString = reqString
-        responseObj.URL = SERVER_URL
-        responseObj.timeBeginRequest = System.currentTimeMillis()
-
-        client.newCall(request).enqueue(object : Callback {
+        CLIENT.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                responseObj.errorString = "Error onFailure: ${e.message}"
+                responseObj.errorString = "on Failure: ${e.message}"
                 responseObj.timeEndRequest = System.currentTimeMillis()
                 deferredResult.complete(responseObj)
             }
@@ -129,18 +118,40 @@ object EMEConnection {
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     if (!response.isSuccessful) {
-                        responseObj.errorString = "Запрос к серверу не был успешен: ${response.code} ${response.message}"
+                        responseObj.errorString = "on response Error: ${response.code} ${response.message}"
                         responseObj.timeEndRequest = System.currentTimeMillis()
                         deferredResult.complete(responseObj)
                         return
                     }
-                    val objResult = response.body!!.string().split("<BR>")
+
+                    val objResult: ArrayList<String>
+                    try {
+                        val mainBody = response.peekBody(response.headersContentLength()).string()
+                        objResult = mainBody.split("<BR>") as ArrayList<String>
+                    } catch (e: ProtocolException) {
+                        responseObj.errorString = e.message
+                        responseObj.timeEndRequest = System.currentTimeMillis()
+
+                        Log.e(TAG, "---")
+                        Log.e(TAG, responseObj.toString())
+                        Log.e(TAG, "---")
+
+                        deferredResult.complete(responseObj)
+                        return
+                    }
+
                     var result = ""
                     objResult.forEachIndexed { index, s ->
                         if (index != 0 && index != objResult.size - 1) result += "$s&"
                     }
                     responseObj.timeEndRequest = System.currentTimeMillis()
+
                     responseObj.create(result)
+                    if (responseObj.isExistsKey("Error"))
+                        responseObj.errorString = responseObj.getValue("Error")
+
+                    Log.e(TAG, responseObj.toString())
+
                     deferredResult.complete(responseObj)
                 }
             }

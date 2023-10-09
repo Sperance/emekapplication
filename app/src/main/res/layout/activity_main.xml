@@ -7,10 +7,28 @@
     android:orientation="vertical"
     tools:context=".MainActivity">
 
+    <EditText
+        android:id="@+id/text_order_id"
+        android:inputType="numberSigned"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"/>
+
     <Button
         android:id="@+id/button_connection"
         android:layout_width="match_parent"
         android:text="Test connection"
+        android:layout_height="wrap_content"/>
+
+    <Button
+        android:id="@+id/button_check_SSCC"
+        android:layout_width="match_parent"
+        android:text="Check SSCC"
+        android:layout_height="wrap_content"/>
+
+    <Button
+        android:id="@+id/button_do_method"
+        android:layout_width="match_parent"
+        android:text="Do timer"
         android:layout_height="wrap_content"/>
 
 </LinearLayout>
