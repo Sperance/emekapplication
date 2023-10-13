@@ -3,6 +3,7 @@ package ru.descend.emekapplication
 import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 class EMEResponse {
@@ -29,7 +30,7 @@ class EMEResponse {
         parseInnerString(inParams)
     }
 
-    fun isSuccessfully() = errorString == null
+    fun isSuccess() = errorString == null
     fun isError() = errorString != null
 
     /**
@@ -48,7 +49,7 @@ class EMEResponse {
     /**
      * Получение строкового представления даты выполнения запроса
      */
-    fun getTimeRequestAsString() = SimpleDateFormat("HH:mm:ss.SSS").format(getTimeRequest())
+    fun getTimeRequestAsString() = SimpleDateFormat("HH:mm:ss.SSS", Locale.ROOT).format(getTimeRequest())
 
     /**
      * Получить кол-во объектов ключ=значение от сервера
