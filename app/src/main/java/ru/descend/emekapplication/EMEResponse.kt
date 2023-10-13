@@ -30,6 +30,7 @@ class EMEResponse {
     }
 
     fun isSuccessfully() = errorString == null
+    fun isError() = errorString != null
 
     /**
      * Получение всего массива данных с сервера по запросу
@@ -69,11 +70,25 @@ class EMEResponse {
         return data.find { it.first == key } != null
     }
 
+    fun removeForKey(key: String): Boolean {
+        if (isExistsKey(key)) {
+            return data.removeAll { it.first == key }
+        }
+        return false
+    }
+
+    fun getError() = errorString
+
+    fun getSuccess(): String {
+        if (isExistsKey("Result")) return getValue("Result")!!
+        return ""
+    }
+
     private fun parseInnerString(inParams: String) {
         val lines = inParams.split("&")
         lines.forEach {
-            val line = it.split("=")
-            if (line.size == 2) data.add(Pair(line[0], line[1]))
+            val line = it.split(Regex("\\b=\\b"))
+            if (line.size == 2) data.add(Pair(line[0], line[1].fromBase64()))
         }
     }
 
@@ -81,10 +96,10 @@ class EMEResponse {
         var params = ""
         data.forEach { params += it.first + "=" + it.second + ";" }
 
-        val tError = if (errorString.isNullOrBlank()) "" else "ERR:$errorString,"
+        val tError = if (errorString.isNullOrBlank()) "" else "ERROR:$errorString,"
         val tParams = if (params.isNullOrBlank()) "" else "PARAMS:$params"
 
-        return "EMEResponse={$tError$tParams}"
+        return "EMEResponse={Request:$requestString $tError$tParams}"
     }
 
     fun onResult(function: (obj: EMEResponse) -> Unit) {

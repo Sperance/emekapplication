@@ -1,13 +1,18 @@
 package ru.descend.emekapplication
 
 import android.os.Build
-import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.FormBody
+import okhttp3.Interceptor
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.internal.headersContentLength
 import java.io.IOException
@@ -16,8 +21,10 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
+
 object EMEConnection {
 
+    private val MEDIA_TYPE: MediaType = "application/json; charset=utf-8".toMediaType()
     private const val TAG = "EMEACon"
 
     private var SERVER_IP: String = ""
@@ -26,9 +33,10 @@ object EMEConnection {
     private var SERVER_URL: String = ""
     private lateinit var CLIENT: OkHttpClient
 
-    private var p_Timeouts: Long = 15
-    private var p_MethodName: String = ""
-    private var p_MethodParams: Int = 0
+    private var p_Timeouts: Long = 10
+
+    private var formBody = FormBody.Builder(Charsets.UTF_8)
+    private var formBodyString = ""
 
     fun setTimeouts(seconds: Long) : EMEConnection {
         p_Timeouts = seconds
@@ -37,14 +45,25 @@ object EMEConnection {
         return this
     }
 
+    suspend fun doRequestField(entry: String, lineId: Int, field: String) : EMEResponse {
+        if (entry.isNullOrBlank()) throw IllegalArgumentException("Object name is empty $entry")
+        if (lineId <= -1) throw IllegalArgumentException("Entry($entry) line is incorrect $lineId")
+        if (field.isNullOrBlank()) throw IllegalArgumentException("Field for entry $entry is not initialized $field")
+
+        addParam("EMEACon_ENTRY", entry)
+        addParam("EMEACon_ENTRY_LINE", lineId.toString())
+        addParam("EMEACon_ENTRY_FIELD", field)
+
+        return doRequest()
+    }
+
     suspend fun doRequestMethod(method: String, paramsCount: Int, vararg params: Pair<String, String>) : EMEResponse {
-        p_MethodName = method
-        if (p_MethodName.isBlank()) throw IllegalArgumentException("Method name does not be Empty")
+        if (method.isNullOrBlank()) throw IllegalArgumentException("Method name does not be Empty $method")
+        if (paramsCount < 0) throw IllegalArgumentException("Method params $paramsCount does not be low than 0")
+        if (paramsCount != params.size) throw IllegalArgumentException("The method($method) should contain $paramsCount parameters, but contains ${params.size} parameters")
 
-        p_MethodParams = paramsCount
-        if (p_MethodParams < 0) throw IllegalArgumentException("Method params does not be low than 0")
-
-        if (p_MethodParams != params.size) throw IllegalArgumentException("The method($p_MethodName) should contain $p_MethodParams parameters, but contains ${params.size} parameters")
+        addParam("EMEACon_METHOD", method)
+        addParam("EMEACon_METHOD_PARAMS", paramsCount.toString())
 
         return doRequest(*params)
     }
@@ -65,48 +84,55 @@ object EMEConnection {
             .connectTimeout(p_Timeouts, TimeUnit.SECONDS)
             .readTimeout(p_Timeouts, TimeUnit.SECONDS)
             .writeTimeout(p_Timeouts, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build()
     }
 
-    private fun addSystemFields(formBody: FormBody.Builder, responseObj: EMEResponse) = formBody.apply {
-        add("EMEACon", EMEResponse.EMECONNECTION_VERSION)  //версия модуля
-        add("EMEACon_DATESTAMP", SimpleDateFormat("yyyy-MM-dd_HH:mm:ss", Locale.ROOT).format(System.currentTimeMillis())) //дата\время устройства
-        add("EMEACon_DEVICE", "SDK: ${Build.VERSION.SDK_INT} PHONE: ${Build.BRAND} ${Build.MODEL}") //информация об устройстве
+    private fun addSystemFields(responseObj: EMEResponse) {
+        formBody.add("EMEACon", EMEResponse.EMECONNECTION_VERSION)  //версия модуля
+        addSysParam("EMEACon_DATESTAMP", SimpleDateFormat("yyyy-MM-dd_HH:mm:ss", Locale.ROOT).format(System.currentTimeMillis())) //дата\время устройства
+        addSysParam("EMEACon_DEVICE", "SDK: ${Build.VERSION.SDK_INT} PHONE: ${Build.BRAND} ${Build.MODEL}") //информация об устройстве
+        addSysParam("EMEACon_REQ_UUID", responseObj.UUIDRequest)
+        addSysParam("EMEACon_REQ_URL", responseObj.URL)
+        addSysParam("EMEACon_REQ_STRING", responseObj.requestString)
+    }
 
-        add("EMEACon_REQ_UUID", responseObj.UUIDRequest)
-        add("EMEACon_REQ_URL", responseObj.URL)
-        add("EMEACon_REQ_STRING", responseObj.requestString)
+    private fun addParam(key: String, value: String) {
+        formBody.add(key.toBase64(), value.toBase64())
+        formBodyString += "$key=$value;"
+    }
+
+    private fun addSysParam(key: String, value: String) {
+        formBody.add(key.toBase64(), value.toBase64())
+    }
+
+    private fun clearTrash() {
+        formBodyString = ""
+        formBody = FormBody.Builder(Charsets.UTF_8)
     }
 
     suspend fun doRequest(vararg params: Pair<String, String>) : EMEResponse {
 
         val responseObj = EMEResponse()
-
         val deferredResult = CompletableDeferred<EMEResponse>()
-        val formBody = FormBody.Builder()
-        var reqString = ""
-
-        if (p_MethodName.isNotBlank()) {
-            reqString += "EMEACon_METHOD=$p_MethodName;"
-            formBody.add("EMEACon_METHOD", p_MethodName)
-            formBody.add("EMEACon_METHOD_PARAMS", p_MethodParams.toString())
-        }
 
         params.forEach {
-            formBody.add(it.first, it.second)
-            reqString += it.first + "=" + it.second + ";"
+            formBody.add(it.first.toBase64(), it.second.toBase64())
+            formBodyString += it.first + "=" + it.second + ";"
         }
 
         responseObj.URL = SERVER_URL
         responseObj.timeBeginRequest = System.currentTimeMillis()
-        responseObj.requestString = reqString
+        responseObj.requestString = formBodyString
 
-        addSystemFields(formBody, responseObj)
+        addSystemFields(responseObj)
 
         val request = Request.Builder()
             .url(SERVER_URL)
             .post(formBody.build())
             .build()
+
+        clearTrash()
 
         CLIENT.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -131,11 +157,6 @@ object EMEConnection {
                     } catch (e: ProtocolException) {
                         responseObj.errorString = e.message
                         responseObj.timeEndRequest = System.currentTimeMillis()
-
-                        Log.e(TAG, "---")
-                        Log.e(TAG, responseObj.toString())
-                        Log.e(TAG, "---")
-
                         deferredResult.complete(responseObj)
                         return
                     }
@@ -147,10 +168,10 @@ object EMEConnection {
                     responseObj.timeEndRequest = System.currentTimeMillis()
 
                     responseObj.create(result)
-                    if (responseObj.isExistsKey("Error"))
+                    if (responseObj.isExistsKey("Error")) {
                         responseObj.errorString = responseObj.getValue("Error")
-
-                    Log.e(TAG, responseObj.toString())
+                        responseObj.removeForKey("Error")
+                    }
 
                     deferredResult.complete(responseObj)
                 }
